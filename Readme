@@ -1,0 +1,131 @@
+# UNIZULU Richards Bay – Engineering Info Chatbot
+
+A retrieval-augmented (RAG) chatbot that answers student questions using:
+
+- `2026_FIRST_SEMESTER_LECTURE_TIME_TABLE_FOR_THE_RICHARDS_BAY_CAMPUS_.xlsx`
+- `2026-UNIZULU-General-Calendar.pdf`
+- `Engineering-Department-Handbook-2024_cleaned.pdf`
+
+It works like this:
+
+```
+Your PDFs/XLSX  --extract_data.py-->  data/processed/corpus.jsonl
+corpus.jsonl    --build_index.py-->   data/processed/index.pkl  (TF-IDF search index)
+index.pkl + your question --app.py--> retrieves relevant chunks --> sends to Claude --> answer
+```
+
+No paid vector database, no GPU, no heavy model downloads — the search step uses
+scikit-learn TF-IDF, which is fast, free, and runs fine on GitHub Actions or
+Streamlit Community Cloud's free tier. Only the final answer-writing step calls
+the Claude API.
+
+---
+
+## 1. Repo layout
+
+```
+unizulu-chatbot/
+├── data/
+│   ├── raw/                # put your 3 source documents here
+│   └── processed/          # generated automatically (corpus.jsonl, index.pkl)
+├── extract_data.py         # step 1: turn PDF/XLSX into clean text chunks
+├── build_index.py          # step 2: build the TF-IDF search index
+├── app.py                  # step 3: Streamlit chatbot UI
+├── requirements.txt
+├── .env.example
+├── .gitignore
+└── .github/workflows/build_index.yml   # auto-rebuilds the index when docs change
+```
+
+## 2. Local setup
+
+```bash
+git clone https://github.com/<your-username>/unizulu-chatbot.git
+cd unizulu-chatbot
+python -m venv venv && source venv/bin/activate   # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+
+# put the 3 source files in data/raw/  (exact names above)
+
+python extract_data.py     # -> data/processed/corpus.jsonl
+python build_index.py      # -> data/processed/index.pkl
+
+cp .env.example .env
+# open .env and paste your Anthropic API key
+
+streamlit run app.py
+```
+
+Open the local URL Streamlit prints (usually http://localhost:8501).
+
+## 3. Get an Anthropic API key
+
+Create one at https://console.anthropic.com/settings/keys. Never commit it —
+`.env` is already in `.gitignore`.
+
+## 4. Push to GitHub
+
+```bash
+git init
+git add .
+git commit -m "Initial UNIZULU chatbot"
+git branch -M main
+git remote add origin https://github.com/<your-username>/unizulu-chatbot.git
+git push -u origin main
+```
+
+Note: `data/raw/*` and `data/processed/*` are ignored by default (see
+`.gitignore`) because the timetable/calendar files may be large or you may not
+want them public. If you *want* them in the repo (e.g. it's a private repo for
+your class), remove those lines from `.gitignore` before committing.
+
+## 5. Deploy for free (so classmates can use it without installing anything)
+
+**Streamlit Community Cloud** deploys directly from a GitHub repo:
+
+1. Go to https://share.streamlit.io → "New app".
+2. Pick your repo, branch `main`, main file `app.py`.
+3. Under **Advanced settings → Secrets**, add:
+   ```toml
+   ANTHROPIC_API_KEY = "sk-ant-..."
+   ```
+4. Click Deploy. If your `data/raw` files aren't in the repo, either:
+   - un-ignore them in `.gitignore` and commit them, or
+   - upload `data/processed/corpus.jsonl` and `index.pkl` instead (smaller, no
+     need to re-extract).
+
+That's it — you get a public URL backed entirely by your GitHub repo.
+
+## 6. GitHub Actions (optional but included)
+
+`.github/workflows/build_index.yml` automatically re-runs
+`extract_data.py` + `build_index.py` whenever you push changes to
+`data/raw/`, and commits the refreshed `corpus.jsonl` / `index.pkl` back to
+the repo. This keeps the deployed chatbot in sync without you rebuilding the
+index by hand.
+
+## 7. How the retrieval works (for the report/writeup)
+
+- `extract_data.py` parses:
+  - the **timetable** row-by-row per sheet (day, time slot, venue, module
+    code), keeping merged-cell context, so a chunk looks like
+    `"MON 07h30-08h20 A2-75: 5EEE401L"`.
+  - the **calendar PDF** and **handbook PDF** page-by-page with
+    `pdfplumber`, split into ~500-word overlapping chunks so answers can cite
+    a specific page.
+- `build_index.py` fits a `TfidfVectorizer` (1–2 grams, English stopwords
+  removed) over all chunks and pickles the vectorizer + matrix.
+- `app.py`, on each question:
+  1. Vectorizes the question with the same TF-IDF vectorizer.
+  2. Ranks chunks by cosine similarity, keeps the top 6.
+  3. Builds a prompt: system instructions + the 6 chunks (with source/page
+     labels) + the user's question.
+  4. Calls `client.messages.create(model="claude-sonnet-4-6", ...)` and
+     streams the answer back into the chat UI.
+  5. Shows the source chunks used, so students can verify against the
+     original document.
+
+This is a standard, lightweight RAG pattern — swap in `sentence-transformers`
+embeddings + FAISS later if you want semantic (not just keyword) search, but
+TF-IDF is deliberately used here because it needs zero downloads and is
+completely deterministic, which matters for a free-tier deployment.
