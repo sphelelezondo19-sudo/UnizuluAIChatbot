@@ -1,0 +1,21 @@
+# secrets
+.env
+
+# python
+venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# source documents (may be large / restricted — remove these two lines
+# if you want them committed to the repo)
+data/raw/*
+!data/raw/.gitkeep
+
+# generated index (optional to ignore — GitHub Action rebuilds it anyway)
+# comment these two lines out if you want the built index committed
+# data/processed/*
+# !data/processed/.gitkeep
+
+# OS
+.DS_Store
